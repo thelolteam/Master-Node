@@ -4,13 +4,16 @@
 #include <vector>
 #include <esp_wifi.h>
 #include <EEPROM.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+
+#define MAX_NODES 10
+#define EEPROM_SIZE 48
+#define led 2
 
 using namespace std;
 
-#define EEPROM_SIZE 32
-#define led 2
-//#define MAX_CLIENTS 5
-#define MAX_NODES 10
+String url = "";
 
 const char *default_ssid = "ESP32";
 const char *default_password = "12345678";
@@ -21,10 +24,9 @@ String parameter[7];
 int parameterCount = 0;
 String message;
 
-const int port = 9999;
-WiFiServer server(port);
-//WiFiClient clients[MAX_CLIENTS];
-int curClientIndex = 0;
+const int port = 80;
+WebServer server(port);
+
 int appNodeID = 0;
 
 class Node{
@@ -60,10 +62,10 @@ void printNodeList(){
   Serial.println(nodes.max_size());
 
   Serial.printf("Node Count: %d", Node::nodeCount);
-  Serial.printf("\n%5s%10s%5s%5s%10s%3s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
+  Serial.printf("\n%5s%10s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
   Serial.println("-----------------------------------------------------------------------");
   for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
-    Serial.printf("%5s%10s%5s%5s%10s%3s\n", nodeIterator->id, nodeIterator->ip, nodeIterator->conStat, nodeIterator->relayStat, nodeIterator->nodeName, nodeIterator->type);
+    Serial.printf("%5s%10s%6s%6s%10s%6s\n", nodeIterator->id, nodeIterator->ip, nodeIterator->conStat, nodeIterator->relayStat, nodeIterator->nodeName, nodeIterator->type);
   }
   Serial.println("-----------------------------------------------------------------------");
   Serial.print("App Node Index: ");
@@ -147,7 +149,7 @@ void WiFiEvent(WiFiEvent_t event){
             break;
         case SYSTEM_EVENT_AP_STADISCONNECTED:
             Serial.println("\nEvent: Client disconnected");
-            //refactorNodeList();
+            refactorNodeList();
             break;
     }
 }
@@ -169,51 +171,32 @@ void separateParameters(String &body){
   Serial.println(parameterCount);
 }
 
-void readPacket(WiFiClient client){
-  String packetData = "", bodyLine = "", curLine = "";
-  
-  int m = client.available();
-  while(m!=0){
-    //c = client.read();
-    packetData.concat(client.read());
-    m--;
-  }
+void sendPacket(IPAddress ip, int port, String &message){
+  HTTPClient client;
+  url = "http://";
+  url.concat(ip);
+  url.concat("/message?data=");
+  url.concat(message);
 
-  Serial.println("Packet: ");
-  Serial.println(packetData);
-  int n = 0, i;
-  for(i=0; i<packetData.length(); i++){
-    if(packetData[i] == '\n'){
-      if(curLine.length() == 0){
-        n = ++i;
-        break;
-      }else{
-        curLine = "";
-      }
-    }else if(packetData[i] == '\r'){
-      curLine += packetData[i];
+  Serial.print("URL: ");
+  Serial.println(url);
+  client.begin(url);
+
+  int httpCode = client.GET();
+  if(httpCode > 0){
+    if(httpCode == HTTP_CODE_OK){
+      Serial.println("Request Sent");
     }
+  }else{
+    Serial.println("HTTP GET Error");
   }
-  bodyLine = packetData.substring(n, packetData.length());
-  Serial.print("Body Line: ");
-  Serial.print(bodyLine);
-  Serial.println("|");
-  separateParameters(bodyLine);
+  client.end();
 }
 
-void sendPacket(IPAddress ip, int port, String &message){
-  Serial.println("Sending Packet: ");
+void sendReply(String &message){
+  Serial.println("Replying: ");
   Serial.println(message);
-  WiFiClient client;
-  Serial.print("IP: ");
-  Serial.println(ip);
-  if(client.connect(ip, port)){
-    client.print(message);
-    client.stop();
-    Serial.println("Sent!");
-  }else{
-    Serial.println("Connection Failed to Client, Send Fail");
-  }
+  server.send(200, "text/plain", message);
 }
 
 void sendNodeStat(int nodeID, int toType){
@@ -227,7 +210,7 @@ void sendNodeStat(int nodeID, int toType){
     toIP = nodes[nodeID].ip;
   }
 
-  message = "HTTP/1.1 200 OK\n\nclient@esp#action@stat#1#";
+  message = "client@esp#action@stat#1#";
   message.concat(nodeID);
   message.concat("#");
   message.concat(nodes[nodeID].nodeName);
@@ -277,7 +260,8 @@ void nodeConfig(IPAddress clientIP){
     added = true;
   }
 
-  message = "HTTP/1.1 200 OK\n\nclient@esp#client@config#1#";
+  message = "client@esp#action@config#1#";
+  //message = "HTTP/1.1 200 OK\n\nclient@esp#client@config#1#";
   message.concat(newNode.id);
   message.concat("#ESP#");
   message.concat(newNode.conStat);
@@ -285,7 +269,7 @@ void nodeConfig(IPAddress clientIP){
   message.concat(newNode.relayStat);
   message.concat("#");
 
-  sendPacket(clientIP, port, message);
+  sendReply(message);
 
   if(type == 2){
     sendNodeStat(newNode.id, 0);
@@ -293,6 +277,7 @@ void nodeConfig(IPAddress clientIP){
     appNodeID = newNode.id;
     //sendNodeListToApp();
   }
+  printNodeList();
 }
 
 void restartDevice(){
@@ -306,6 +291,42 @@ void resetDevice(){
   strcpy(password, default_password);
   setMetaData();
   restartDevice();
+}
+
+void parameterDecode(){
+  if(parameter[1].equals("action@stat")){
+      setNodeStat();
+    }
+    else if(parameter[1].equals("action@config")){
+      WiFiClient client = server.client();
+      IPAddress clientIP = client.remoteIP();
+      nodeConfig(clientIP);
+    }
+    else if(parameter[1].equals("action@reset")){
+      resetDevice();
+    }else if(parameter[1].equals("action@apconfig")){
+
+    }
+}
+
+void handleRoot(){
+  Serial.println("Root page accessed by a client!");
+  server.send ( 200, "text/plain", "Hello, you are at root!");
+}
+
+
+void handleNotFound(){
+  server.send ( 404, "text/plain", "404, No resource found");
+}
+
+void handleMessage(){
+  if(server.hasArg("data")){
+    message = server.arg("data");
+    separateParameters(message);
+    parameterDecode();
+  }else{
+    server.send(200, "text/plain", "Message Without Body");
+  }
 }
 
 void setup() {
@@ -327,33 +348,14 @@ void setup() {
 
   Serial.print("ESP32 IP: ");
   Serial.println(WiFi.softAPIP());
+  server.on("/", handleRoot);
+  server.on("/message", handleMessage);
+  server.onNotFound(handleNotFound);
   server.begin();
   Serial.printf("Server Started: %d\n\n", port);
 }
 
+
 void loop() {
-  if(server.hasClient()){
-    Serial.println("New Client");
-    WiFiClient client = server.available();
-    while(!client.available());
-    readPacket(client);
-    IPAddress clientIP = client.remoteIP();
-    if(client.connected())
-      client.stop();
-    
-    if(parameter[1].equals("action@stat")){
-      setNodeStat();
-    }
-    else if(parameter[1].equals("action@config")){
-      nodeConfig(clientIP);
-    }
-    else if(parameter[1].equals("action@reset")){
-      resetDevice();
-    }else if(parameter[1].equals("action@apconfig")){
-
-    }
-
-  }
-
-
+  server.handleClient();
 }
