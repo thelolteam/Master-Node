@@ -62,19 +62,32 @@ void printNodeList(){
   Serial.println(nodes.max_size());
 
   Serial.printf("Node Count: %d", Node::nodeCount);
-  Serial.printf("\n%5s%10s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
-  Serial.println("-----------------------------------------------------------------------");
-  for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
-    Serial.printf("%5s%10s%6s%6s%10s%6s\n", nodeIterator->id, nodeIterator->ip, nodeIterator->conStat, nodeIterator->relayStat, nodeIterator->nodeName, nodeIterator->type);
+  Serial.printf("\n%3s%3s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
+  Serial.println("---------------------------------------------");
+  if(Node::nodeCount > 0){
+    for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
+      Serial.print(nodeIterator->id);
+      Serial.print(" ");
+      Serial.print(nodeIterator->ip);
+      Serial.print(" ");
+      Serial.print(nodeIterator->conStat);
+      Serial.print(" ");
+      Serial.print(nodeIterator->relayStat);
+      Serial.print(" ");
+      Serial.print(nodeIterator->nodeName);
+      Serial.print(" ");
+      Serial.println(nodeIterator->type);
+    }
   }
-  Serial.println("-----------------------------------------------------------------------");
+  
+  Serial.println("---------------------------------------------");
   Serial.print("App Node Index: ");
   Serial.println(appNodeID);
   Serial.println();
 }
 
 void refactorNodeList(){
-  Serial.println("Someone Bailed on Us, Refactoring Node List----------------------");
+  Serial.println("Refactoring Node List----------------------");
   IPAddress addr;
   wifi_sta_list_t staList;
   tcpip_adapter_sta_list_t adapter;
@@ -87,18 +100,20 @@ void refactorNodeList(){
 
   for(int i=0; i<Node::nodeCount; i++){
     bool active = false;
-    Serial.print("Node IP: ");
-      Serial.print(nodes[i].ip);
+    //Serial.print("Node IP: ");
+      //Serial.print(nodes[i].ip);
     for(int j=0; j<adapter.num; j++){
       tcpip_adapter_sta_info_t station = adapter.sta[j];
       addr.fromString(ip4addr_ntoa(&station.ip));
-      
+      Serial.println(nodes[i].ip);
       if(nodes[i].ip == addr){
         Serial.println(" Present");
         active = true;
         break;
       }
     }
+    Serial.print("Active: ");
+    Serial.println(active);
     if(!active){
       Serial.println(" Absent");
       if(nodes[i].type==0)
@@ -146,6 +161,7 @@ void WiFiEvent(WiFiEvent_t event){
     switch (event) {
         case SYSTEM_EVENT_AP_STACONNECTED:
             Serial.println("\nEvent: Client connected");
+            //refactorNodeList();
             break;
         case SYSTEM_EVENT_AP_STADISCONNECTED:
             Serial.println("\nEvent: Client disconnected");
@@ -261,7 +277,6 @@ void nodeConfig(IPAddress clientIP){
   }
 
   message = "client@esp#action@config#1#";
-  //message = "HTTP/1.1 200 OK\n\nclient@esp#client@config#1#";
   message.concat(newNode.id);
   message.concat("#ESP#");
   message.concat(newNode.conStat);
@@ -271,7 +286,7 @@ void nodeConfig(IPAddress clientIP){
 
   sendReply(message);
 
-  if(type == 2){
+  if(type == 2 && appNodeID!=0){
     sendNodeStat(newNode.id, 0);
   }else if(type == 0){
     appNodeID = newNode.id;
