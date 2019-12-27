@@ -83,7 +83,7 @@ void printNodeList(){
   }
   
   Serial.println("---------------------------------------------");
-  Serial.print("App Node Index: ");
+  Serial.print("App Node ID: ");
   Serial.println(appNodeID);
 }
 
@@ -193,32 +193,47 @@ void sendNodeStat(int nodeID, int toType){
     toIP = nodes[appNodeID-1].ip;
   }
   else if(toType == 2){
-    toIP = nodes[nodeID].ip;
+    toIP = nodes[nodeID-1].ip;
   }
 
   message = "client@esp$action@stat$1$";
   message.concat(nodeID);
   message.concat("$");
-  message.concat(nodes[nodeID].nodeName);
+  message.concat(nodes[nodeID-1].nodeName);
   message.concat("$");
-  message.concat(nodes[nodeID].conStat);
+  message.concat(nodes[nodeID-1].conStat);
   message.concat("$");
-  message.concat(nodes[nodeID].relayStat);
+  message.concat(nodes[nodeID-1].relayStat);
   message.concat("$");
 
   sendPacket(toIP, port, message);
+}
+
+void sendNodeListToApp(){
+  for(int i=0; i<Node::nodeCount; i++){
+    if(nodes[i].id != appNodeID){
+      sendNodeStat(i+1, 0);
+      Serial.printf("\nStat of ID: %d Sent to APP\n", i+1);
+      delay(1000);
+    }
+  }
 }
 
 void setNodeStat(){
   int nodeId = parameter[3].toInt();
   int index = nodeId - 1;
   
+  Serial.print("Index Node to SET: ");
+  Serial.println(index);
+
   if(index < Node::nodeCount && index>=0){
     nodes[index].relayStat = parameter[6].toInt();
     nodes[index].conStat = parameter[5].toInt();
     nodes[index].nodeName = parameter[4];
 
     sendReply("ESP: NodeStat RCVD");
+
+  printNodeList();
     if(parameter[2].toInt() == 0){
       sendNodeStat(nodeId, 2);
     }else if(parameter[2].toInt() == 2 && appNodeID!=0)
@@ -285,24 +300,43 @@ void WiFiEvent(WiFiEvent_t event){
 void nodeConfig(IPAddress clientIP){
   bool added = false;
   int type = parameter[2].toInt();
+  int mayBeID = 0;
+  Serial.print("Client iP: ");
+  Serial.println(clientIP);
+  
   Node newNode(clientIP, parameter[4], type, parameter[6].toInt());
 
   for(int i=0; i<Node::nodeCount; i++){
-    if(!nodes[i].conStat){
+    if(clientIP == nodes[i].ip){
+      Serial.println("Entry Exists, updating...");
       Serial.printf("\nAssigning ID: %d", i+1);
       newNode.id = i+1;
-      nodes[i] = newNode;
-      Node::nodeCount++;
+      nodes[i].relayStat = parameter[6].toInt();
+      nodes[i].conStat = 1;
+      nodes[i].nodeName = parameter[4];
       added = true;
       break;
     }
+    if(!nodes[i].conStat)
+      mayBeID = i+1;
   }
   if(!added){
-    Node::nodeCount++;
-    Serial.printf("\nAssigning ID: %d", Node::nodeCount);
-    newNode.id = Node::nodeCount;
-    nodes.push_back(newNode);
-    added = true;
+    added = false;
+
+    if(mayBeID!=0){
+      Serial.printf("\nAssigning ID: %d", mayBeID);
+      newNode.id = mayBeID;
+      nodes[mayBeID - 1] = newNode;
+      Node::nodeCount++;
+      added = true;
+    }
+    if(!added){
+      Node::nodeCount++;
+      Serial.printf("\nAssigning ID: %d", Node::nodeCount);
+      newNode.id = Node::nodeCount;
+      nodes.push_back(newNode);
+      added = true;
+    }
   }
 
   message = "client@esp$action@config$1$";
@@ -323,7 +357,8 @@ void nodeConfig(IPAddress clientIP){
     sendNodeStat(newNode.id, 0);
   }else if(type == 0){
     appNodeID = newNode.id;
-    //sendNodeListToApp();
+    //sendNodeListToApp(); ------> not required
+    //sendNodeList to app will be called when app requests for it.
   }
   printNodeList();
 }
@@ -340,27 +375,28 @@ void resetDevice(){
 void parameterDecode(){
   if(parameter[1].equals("action@stat")){
       setNodeStat();
-    }
-    else if(parameter[1].equals("action@config")){
-      Serial.println("Node Config Request");
-      if(Node::nodeCount < MAX_NODES){
-        WiFiClient client = server.client();
-        IPAddress clientIP = client.remoteIP();
-        nodeConfig(clientIP);
-      }else{
-        Serial.println("Node List Full");
-        server.send(200, "text/plain", "Node List Full");
-      }
-      
-    }
-    else if(parameter[1].equals("action@reset") && parameter[0].equals("client@app")){
-      resetDevice();
-    }else if(parameter[1].equals("action@apconfig") && parameter[0].equals("client@app")){
-        strcpy(ssid, parameter[2].c_str());
-        strcpy(password, parameter[3].c_str());
-        setMetaData();
-        sendAPConfig();
-    }
+  }
+  else if(parameter[1].equals("action@config")){
+    Serial.println("Node Config Request");
+    if(Node::nodeCount < MAX_NODES){
+      WiFiClient client = server.client();
+      IPAddress clientIP = client.remoteIP();
+      nodeConfig(clientIP);
+    }else{
+      Serial.println("Node List Full");
+      server.send(200, "text/plain", "Node List Full");
+    } 
+  }else if(parameter[1].equals("action@getnodelist")){
+    sendNodeListToApp();
+  }
+  else if(parameter[1].equals("action@reset") && parameter[0].equals("client@app")){
+    resetDevice();
+  }else if(parameter[1].equals("action@apconfig") && parameter[0].equals("client@app")){
+      strcpy(ssid, parameter[2].c_str());
+      strcpy(password, parameter[3].c_str());
+      setMetaData();
+      sendAPConfig();
+  }
 }
 
 void handleRoot(){
