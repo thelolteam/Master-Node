@@ -36,7 +36,7 @@ class Node{
     IPAddress ip;
     String nodeName;
     int id, type;
-    bool conStat, relayStat;
+    bool conStat, relayStat, notifiedAppofDisconnect;
   
     Node(IPAddress ip, String nodeName, int type, bool relayStat = false){
       this->ip = ip;
@@ -44,6 +44,7 @@ class Node{
       this->type = type;
       this->relayStat = relayStat;
       conStat = true;
+      notifiedAppofDisconnect = false;
     }
 
     Node(){}
@@ -64,19 +65,19 @@ void blink(int times){
 
 void printNodeList(){
   Serial.printf("Node Count: %d", Node::nodeCount);
-  Serial.printf("\n%3s%3s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
+  Serial.printf("\n%3s%10s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
   Serial.println("---------------------------------------------");
   if(Node::nodeCount > 0){
     for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
       Serial.print(nodeIterator->id);
       Serial.print("  ");
       Serial.print(nodeIterator->ip);
-      Serial.print("  ");
+      Serial.print("    ");
       Serial.print(nodeIterator->conStat);
-      Serial.print("  ");
+      Serial.print("    ");
       Serial.print(nodeIterator->relayStat);
       Serial.print("  ");
-      Serial.print(nodeIterator->nodeName);
+      Serial.printf("%10s", nodeIterator->nodeName.c_str());
       Serial.print("  ");
       Serial.println(nodeIterator->type);
     }
@@ -214,7 +215,7 @@ void sendNodeListToApp(){
     if(nodes[i].id != appNodeID){
       sendNodeStat(i+1, 0);
       Serial.printf("\nStat of ID: %d Sent to APP\n", i+1);
-      delay(1000);
+      delay(500);
     }
   }
 }
@@ -230,14 +231,13 @@ void setNodeStat(){
     nodes[index].relayStat = parameter[6].toInt();
     nodes[index].conStat = parameter[5].toInt();
     nodes[index].nodeName = parameter[4];
-
     sendReply("ESP: NodeStat RCVD");
 
   printNodeList();
-    if(parameter[2].toInt() == 0){
-      sendNodeStat(nodeId, 2);
-    }else if(parameter[2].toInt() == 2 && appNodeID!=0)
-      sendNodeStat(nodeId, 0);
+  if(parameter[2].toInt() == 0){
+    sendNodeStat(nodeId, 2);
+  }else if(parameter[2].toInt() == 2 && appNodeID!=0)
+    sendNodeStat(nodeId, 0);
   }else{
     sendReply("ESP: Invalid ID");
   }
@@ -273,9 +273,14 @@ void refactorNodeList(){
       Serial.println(" Absent");
       if(nodes[i].type==0)
         appNodeID = 0;
+      Serial.print("AppNodeId: ");
+      Serial.println(appNodeID);
       nodes[i].conStat = false;
-      if(appNodeID!=0)
+      if(appNodeID!=0 && !nodes[i].notifiedAppofDisconnect)
+      {
+        nodes[i].notifiedAppofDisconnect = true;
         sendNodeStat(i+1, 0);
+      }
     }
   }
   printNodeList();
@@ -326,6 +331,7 @@ void nodeConfig(IPAddress clientIP){
     if(mayBeID!=0){
       Serial.printf("\nAssigning ID: %d", mayBeID);
       newNode.id = mayBeID;
+      newNode.conStat = 1;
       nodes[mayBeID - 1] = newNode;
       Node::nodeCount++;
       added = true;
@@ -334,9 +340,11 @@ void nodeConfig(IPAddress clientIP){
       Node::nodeCount++;
       Serial.printf("\nAssigning ID: %d", Node::nodeCount);
       newNode.id = Node::nodeCount;
+      newNode.conStat = 1;
       nodes.push_back(newNode);
       added = true;
     }
+
   }
 
   message = "client@esp$action@config$1$";
@@ -373,6 +381,12 @@ void resetDevice(){
 }
 
 void parameterDecode(){
+
+  for(int i=0; i<7; i++)
+  {
+    Serial.printf("\nparameter[%d]: ",i);
+    Serial.println(parameter[i]);
+  }
   if(parameter[1].equals("action@stat")){
       setNodeStat();
   }
@@ -387,15 +401,19 @@ void parameterDecode(){
       server.send(200, "text/plain", "Node List Full");
     } 
   }else if(parameter[1].equals("action@getnodelist")){
+    sendReply("ESP: Request for Node List RCVD");
+
     sendNodeListToApp();
   }
   else if(parameter[1].equals("action@reset") && parameter[0].equals("client@app")){
     resetDevice();
   }else if(parameter[1].equals("action@apconfig") && parameter[0].equals("client@app")){
+      sendReply("ESP: APConfig Received");
       strcpy(ssid, parameter[2].c_str());
       strcpy(password, parameter[3].c_str());
       setMetaData();
       sendAPConfig();
+      restartDevice();
   }
 }
 
