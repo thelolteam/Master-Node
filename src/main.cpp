@@ -21,7 +21,6 @@ char ssid[11], password[11];
 const char ssidLoc = 0, passLoc = 10; 
 
 String parameter[7];
-int parameterCount = 0;
 String message;
 
 const int port = 8080;
@@ -46,8 +45,6 @@ class Node{
       conStat = true;
       notifiedAppofDisconnect = false;
     }
-
-    Node(){}
 };
 
 int Node::nodeCount = 0;
@@ -59,7 +56,7 @@ void blink(int times){
     digitalWrite(led, HIGH);
     delay(500);
     digitalWrite(led, LOW);
-    delay(300);
+    delay(400);
   }
 }
 
@@ -82,13 +79,10 @@ void printNodeList(){
       Serial.println(nodeIterator->type);
     }
   }
-  
   Serial.println("---------------------------------------------");
   Serial.print("App Node ID: ");
   Serial.println(appNodeID);
 }
-
-
 
 void writeMemory(char addr, char *data){
   int i;
@@ -120,24 +114,19 @@ void setMetaData(){
   writeMemory(passLoc, password);
 }
 
-
 void restartDevice(){
   Serial.println("Restarting....");
-  delay(1000);
   esp_restart();
 }
 
 void separateParameters(String &input){
-  parameterCount = 0;
   int startI = 0, endI = 0, i;
-  Serial.println();
   for(i=0; i<7; i++){
     parameter[i] = "";
     if(startI<input.length()){
       endI = input.indexOf('$', startI);
       parameter[i] = input.substring(startI, endI);
       startI = endI+1;
-      parameterCount++;
     }
   }
 }
@@ -214,7 +203,6 @@ void sendNodeListToApp(){
   for(int i=0; i<Node::nodeCount; i++){
     if(nodes[i].id != appNodeID){
       sendNodeStat(i+1, 0);
-      Serial.printf("\nStat of ID: %d Sent to APP\n", i+1);
       delay(500);
     }
   }
@@ -223,9 +211,6 @@ void sendNodeListToApp(){
 void setNodeStat(){
   int nodeId = parameter[3].toInt();
   int index = nodeId - 1;
-  
-  Serial.print("Index Node to SET: ");
-  Serial.println(index);
 
   if(index < Node::nodeCount && index>=0){
     nodes[index].relayStat = parameter[6].toInt();
@@ -257,24 +242,18 @@ void refactorNodeList(){
 
   for(int i=0; i<Node::nodeCount; i++){
     bool active = false;
-    //Serial.print("Node IP: ");
-      //Serial.print(nodes[i].ip);
     for(int j=0; j<adapter.num; j++){
       tcpip_adapter_sta_info_t station = adapter.sta[j];
       addr.fromString(ip4addr_ntoa(&station.ip));
       Serial.print(nodes[i].ip);
       if(nodes[i].ip == addr){
-        Serial.println(" Present");
         active = true;
         break;
       }
     }
     if(!active){
-      Serial.println(" Absent");
       if(nodes[i].type==0)
         appNodeID = 0;
-      Serial.print("AppNodeId: ");
-      Serial.println(appNodeID);
       nodes[i].conStat = false;
       if(appNodeID!=0 && !nodes[i].notifiedAppofDisconnect)
       {
@@ -291,7 +270,6 @@ void WiFiEvent(WiFiEvent_t event){
         case SYSTEM_EVENT_AP_STACONNECTED:
             Serial.println("\nEvent: Client connected");
             blink(2);
-            //refactorNodeList();
             break;
         case SYSTEM_EVENT_AP_STADISCONNECTED:
             Serial.println("\nEvent: Client disconnected");
@@ -301,20 +279,17 @@ void WiFiEvent(WiFiEvent_t event){
     }
 }
 
-
 void nodeConfig(IPAddress clientIP){
   bool added = false;
   int type = parameter[2].toInt();
   int mayBeID = 0;
-  Serial.print("Client iP: ");
+  Serial.print("New Client IP: ");
   Serial.println(clientIP);
   
   Node newNode(clientIP, parameter[4], type, parameter[6].toInt());
 
   for(int i=0; i<Node::nodeCount; i++){
     if(clientIP == nodes[i].ip){
-      Serial.println("Entry Exists, updating...");
-      Serial.printf("\nAssigning ID: %d", i+1);
       newNode.id = i+1;
       nodes[i].relayStat = parameter[6].toInt();
       nodes[i].conStat = 1;
@@ -327,9 +302,7 @@ void nodeConfig(IPAddress clientIP){
   }
   if(!added){
     added = false;
-
     if(mayBeID!=0){
-      Serial.printf("\nAssigning ID: %d", mayBeID);
       newNode.id = mayBeID;
       newNode.conStat = 1;
       nodes[mayBeID - 1] = newNode;
@@ -338,13 +311,11 @@ void nodeConfig(IPAddress clientIP){
     }
     if(!added){
       Node::nodeCount++;
-      Serial.printf("\nAssigning ID: %d", Node::nodeCount);
       newNode.id = Node::nodeCount;
       newNode.conStat = 1;
       nodes.push_back(newNode);
       added = true;
     }
-
   }
 
   message = "client@esp$action@config$1$";
@@ -355,19 +326,15 @@ void nodeConfig(IPAddress clientIP){
   message.concat(newNode.relayStat);
   message.concat("$");
 
-  //Only send okay as reply.
   sendReply("ESP32: Config RQST RCVD");
-  delay(1000);
-  //Send the config packet as new http request
+  delay(500);
   sendPacket(clientIP, port, message);
 
-  if(type == 2 && appNodeID!=0){
+  if(type == 2 && appNodeID!=0)
     sendNodeStat(newNode.id, 0);
-  }else if(type == 0){
+  else if(type == 0)
     appNodeID = newNode.id;
-    //sendNodeListToApp(); ------> not required
-    //sendNodeList to app will be called when app requests for it.
-  }
+
   printNodeList();
 }
 
@@ -382,11 +349,6 @@ void resetDevice(){
 
 void parameterDecode(){
 
-  for(int i=0; i<7; i++)
-  {
-    Serial.printf("\nparameter[%d]: ",i);
-    Serial.println(parameter[i]);
-  }
   if(parameter[1].equals("action@stat")){
       setNodeStat();
   }
@@ -398,11 +360,10 @@ void parameterDecode(){
       nodeConfig(clientIP);
     }else{
       Serial.println("Node List Full");
-      server.send(200, "text/plain", "Node List Full");
+      server.send(200, "text/plain", "ESP: Node List Full");
     } 
   }else if(parameter[1].equals("action@getnodelist")){
     sendReply("ESP: Request for Node List RCVD");
-
     sendNodeListToApp();
   }
   else if(parameter[1].equals("action@reset") && parameter[0].equals("client@app")){
@@ -419,11 +380,11 @@ void parameterDecode(){
 
 void handleRoot(){
   Serial.println("Root page accessed by a client!");
-  server.send ( 200, "text/plain", "Hello, you are at root!");
+  server.send ( 200, "text/plain", "ESP: Hello, you are at root!");
 }
 
 void handleNotFound(){
-  server.send ( 404, "text/plain", "404, No resource found");
+  server.send ( 404, "text/plain", "ESP: 404, No resource found");
 }
 
 void handleMessage(){
@@ -433,7 +394,7 @@ void handleMessage(){
     separateParameters(message);
     parameterDecode();
   }else{
-    server.send(200, "text/plain", "Message Without Body");
+    server.send(200, "text/plain", "ESP: Message Without Body");
   }
 }
 
@@ -441,7 +402,7 @@ void setup() {
   pinMode(led, OUTPUT);
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
-  delay(1000);
+  delay(400);
   getMetaData();
   
   WiFi.onEvent(WiFiEvent);
