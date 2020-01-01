@@ -56,7 +56,7 @@ void blink(int times){
     digitalWrite(led, HIGH);
     delay(500);
     digitalWrite(led, LOW);
-    delay(400);
+    delay(500);
   }
 }
 
