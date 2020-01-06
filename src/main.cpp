@@ -6,12 +6,23 @@
 #include <EEPROM.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include <HardwareSerial.h>
 
 #define MAX_NODES 10
 #define EEPROM_SIZE 48
 #define led 2
+#define rx 16
+#define tx 17
 
 using namespace std;
+
+
+int red = 22, green = 23;
+byte com = 0, temp = 0;
+int nodeSelected = 0;
+HardwareSerial voiceSerial(1);
+String selectedNodeName = "";
+int vrm = 0;
 
 String url = "";
 
@@ -58,6 +69,18 @@ void blink(int times){
     digitalWrite(led, LOW);
     delay(500);
   }
+}
+
+void blinkRed(){
+  digitalWrite(red, HIGH);
+  delay(100);
+  digitalWrite(red, LOW);
+}
+
+void blinkGreen(){
+  digitalWrite(green, HIGH);
+  delay(100);
+  digitalWrite(green, LOW);
 }
 
 void printNodeList(){
@@ -398,13 +421,145 @@ void handleMessage(){
   }
 }
 
+//------------------------------------------
+
+void setNodeStatOf(String name, int rStat){
+  for(int i = 0; i<Node::nodeCount; i++){
+    if(nodes[i].conStat && nodes[i].nodeName.equals(name)){
+      nodes[i].relayStat = rStat;
+      sendNodeStat(i+1, 2);
+      if(appNodeID!=0)
+        sendNodeStat(i+1, 0);
+      //break;
+    }
+  }
+}
+
+void waitingState(){
+  voiceSerial.write(0xAA);
+  voiceSerial.write((byte)0x00);
+  while(!voiceSerial.available());
+  while(voiceSerial.available()){
+    Serial.print("Wait Return: ");
+    Serial.println(voiceSerial.read(), HEX);
+  }
+}
+
+void importG1(){
+  int flag = 1;
+  unsigned long i = 0;
+  waitingState();
+  while(flag){
+    i = millis();
+    
+    voiceSerial.write(0xAA);
+    voiceSerial.write(0x21);
+    
+    
+    while(!voiceSerial.available() && millis()-i<100);
+  
+    
+    if(voiceSerial.available()){
+      temp = voiceSerial.read();
+      if(temp == 0xCC)
+      {  
+        flag = 0;
+        i = millis() - i;
+        Serial.print("Imported 1: ");
+        Serial.print(i);
+        Serial.println(" msec");
+        blinkGreen();
+      }
+    }
+  }
+}
+
+void importG2(){
+  int flag = 1;
+  unsigned long i = 0;
+  
+  waitingState();
+  
+  while(flag){
+    i = millis();
+    
+    voiceSerial.write(0xAA);
+    voiceSerial.write(0x22);
+    
+    while(!voiceSerial.available() && millis()-i<100);
+    
+    if(voiceSerial.available()){
+      temp = voiceSerial.read();
+      if(temp == 0xCC)
+      {  
+        flag = 0;
+        i = millis() - i;
+        Serial.print("Imported 2: ");
+        Serial.print(i);
+        Serial.println(" msec");
+        blinkGreen();
+      }
+    }
+  }
+}
+
+void selectActivity(){
+  importG2();
+
+  unsigned long i = millis();
+  while(!voiceSerial.available() && (millis()-i<3000));
+  if(voiceSerial.available()){
+    com = voiceSerial.read();
+    Serial.print("Voice Com 2: ");
+    Serial.println(com, HEX);
+
+    switch(com){
+      case 0x11:
+        setNodeStatOf(selectedNodeName, 1);
+        break;
+      case 0x12:
+        setNodeStatOf(selectedNodeName, 0);
+        break;
+      default:
+        break;
+    }
+  }
+  else{
+    Serial.println("No Command");
+    blinkRed();
+  }
+}
+
+//------------------------------------------
+
+
 void setup() {
+  pinMode(red, OUTPUT);
+  pinMode(green, OUTPUT);
   pinMode(led, OUTPUT);
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
   delay(400);
   getMetaData();
   
+  voiceSerial.begin(9600, SERIAL_8N1, rx, tx);
+  voiceSerial.write(0xAA);
+  voiceSerial.write(0x37);
+
+  Serial.println("Wrote");
+  delay(1000);
+
+  if(voiceSerial.available()){
+    while(voiceSerial.available())
+      voiceSerial.read();
+
+    Serial.println("Importing");
+    vrm = 1;
+    importG1();
+  }
+
+  
+
   WiFi.onEvent(WiFiEvent);
 
   Serial.println("Configuring AP...");
@@ -426,4 +581,42 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  
+  while(voiceSerial.available() && vrm == 1){
+    com = voiceSerial.read();
+    Serial.print("Voice Com 1: ");
+    Serial.println(com, HEX);
+
+    switch(com){
+      case 0x11:
+        selectedNodeName = "Light";
+        nodeSelected = 1;
+        break;
+      case 0x12:
+        selectedNodeName = "Fan";
+        nodeSelected = 1;
+        break;
+      case 0x13:
+        selectedNodeName = "Tv";
+        nodeSelected = 1;
+        break;
+      case 0x14:
+        selectedNodeName = "AC";
+        nodeSelected = 1;
+        break;
+      case 0x15:
+        nodeSelected = 0;
+        break;
+      default:
+        importG1();
+        break;
+    }
+
+    if(nodeSelected!=0){
+      selectActivity();
+      importG1();
+      nodeSelected = 0;
+    }
+  }
 }
+
