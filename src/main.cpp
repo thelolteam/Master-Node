@@ -166,7 +166,6 @@ void sendPacket(IPAddress ip, int port, String &message){
   url.concat(ip.toString());
   url.concat(":8080/message?data=");
   url.concat(message);
-
   Serial.print("URL: ");
   Serial.println(url);
   client.begin(url);
@@ -543,6 +542,7 @@ void setup() {
   getMetaData();
   
   voiceSerial.begin(9600, SERIAL_8N1, rx, tx);
+  delay(300);
   voiceSerial.write(0xAA);
   voiceSerial.write(0x37);
 
