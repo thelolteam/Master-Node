@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <HardwareSerial.h>
+#include <set>
 
 #define MAX_NODES 10
 #define EEPROM_SIZE 48
@@ -16,6 +17,8 @@
 
 using namespace std;
 
+//set<String> irNames;
+set<String>::iterator setIterator;
 
 int red = 22, green = 23;
 byte com = 0, temp = 0;
@@ -23,8 +26,6 @@ int nodeSelected = 0;
 HardwareSerial voiceSerial(1);
 String selectedNodeName = "";
 int vrm = 0;
-
-String url = "";
 
 const char *default_ssid = "ESP32";
 const char *default_password = "12345678";
@@ -36,6 +37,7 @@ String message;
 
 const int port = 8080;
 WebServer server(port);
+String url = "";
 
 int appNodeID = 0;
 
@@ -47,7 +49,8 @@ class Node{
     String nodeName;
     int id, type;
     bool conStat, relayStat, notifiedAppofDisconnect;
-  
+    set<String> irActions;
+
     Node(IPAddress ip, String nodeName, int type, bool relayStat = false){
       this->ip = ip;
       this->nodeName = nodeName;
@@ -56,6 +59,17 @@ class Node{
       conStat = true;
       notifiedAppofDisconnect = false;
     }
+
+    Node(IPAddress ip, String nodeName, int type, set<String> irNames, bool relayStat = false){
+      this->ip = ip;
+      this->nodeName = nodeName;
+      this->type = type;
+      this->relayStat = relayStat;
+      conStat = true;
+      this->irActions = irNames;
+      notifiedAppofDisconnect = false;
+    }
+    Node(){}
 };
 
 int Node::nodeCount = 0;
@@ -65,9 +79,9 @@ vector<Node>::iterator nodeIterator;
 void blink(int times){
   for(int i=0; i<times; i++){
     digitalWrite(led, HIGH);
-    delay(500);
+    delay(300);
     digitalWrite(led, LOW);
-    delay(500);
+    delay(300);
   }
 }
 
@@ -85,8 +99,8 @@ void blinkGreen(){
 
 void printNodeList(){
   Serial.printf("Node Count: %d", Node::nodeCount);
-  Serial.printf("\n%3s%10s%6s%6s%10s%6s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type");
-  Serial.println("---------------------------------------------");
+  Serial.printf("\n%3s%10s%6s%6s%10s%6s%8s\n", "ID", "IP", "CStat", "Rstat", "Name", "Type", "Actions");
+  Serial.println("-------------------------------------------------------");
   if(Node::nodeCount > 0){
     for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
       Serial.print(nodeIterator->id);
@@ -99,10 +113,17 @@ void printNodeList(){
       Serial.print("  ");
       Serial.printf("%10s", nodeIterator->nodeName.c_str());
       Serial.print("  ");
-      Serial.println(nodeIterator->type);
+      Serial.print(nodeIterator->type);
+      if(nodeIterator->type == 3){
+        for(setIterator = nodeIterator->irActions.begin(); setIterator!=nodeIterator->irActions.end(); setIterator++){
+          Serial.print(" ");
+          Serial.print(*setIterator);
+        }
+      }
+      Serial.println();
     }
   }
-  Serial.println("---------------------------------------------");
+  Serial.println("---------------------------------------------------");
   Serial.print("App Node ID: ");
   Serial.println(appNodeID);
 }
@@ -190,41 +211,51 @@ void sendAPConfig(){
   message.concat("$");
 
   for(nodeIterator = nodes.begin(); nodeIterator<nodes.end(); nodeIterator++){
-    //only send apconfig to slave nodes, type = 2 and 3 in future
-    if(nodeIterator->conStat && nodeIterator->type == 2){
+    if(nodeIterator->conStat && nodeIterator->type != 0)
       sendPacket(nodeIterator->ip, port, message);
-    }
   }
 }
 
 void sendNodeStat(int nodeID, int toType){
-  //toType = 0, send to APP
-  //toType = 2, send to Node
   IPAddress toIP;
+  Node node = nodes[nodeID-1];
   if(toType == 0){
     toIP = nodes[appNodeID-1].ip;
   }
-  else if(toType == 2){
-    toIP = nodes[nodeID-1].ip;
+  else{
+    toIP = node.ip;
   }
-
-  message = "client@esp$action@stat$1$";
+  message = "client@esp$action@stat$";
+  message.concat(node.type);
+  message.concat("$");
   message.concat(nodeID);
   message.concat("$");
-  message.concat(nodes[nodeID-1].nodeName);
+  message.concat(node.nodeName);
+  
+  if(node.type == 3){
+    bool hasIrAction = false;
+    for(setIterator = node.irActions.begin(); setIterator!=node.irActions.end(); setIterator++){
+      message.concat("_");
+      message.concat(*setIterator);
+      hasIrAction = true;
+    }
+    if(hasIrAction)
+      message.concat("_");
+  }
+
   message.concat("$");
-  message.concat(nodes[nodeID-1].conStat);
+  message.concat(node.conStat);
   message.concat("$");
-  message.concat(nodes[nodeID-1].relayStat);
+  message.concat(node.relayStat);
   message.concat("$");
 
   sendPacket(toIP, port, message);
 }
 
 void sendNodeListToApp(){
-  for(int i=0; i<Node::nodeCount; i++){
-    if(nodes[i].id != appNodeID){
-      sendNodeStat(i+1, 0);
+  for(nodeIterator=nodes.begin(); nodeIterator!=nodes.end(); nodeIterator++){
+    if(nodeIterator->id != appNodeID){
+      sendNodeStat(nodeIterator->id, 0);
       delay(500);
     }
   }
@@ -233,22 +264,40 @@ void sendNodeListToApp(){
 void setNodeStat(){
   int nodeId = parameter[3].toInt();
   int index = nodeId - 1;
+  String tempName;
 
   if(index < Node::nodeCount && index>=0){
     nodes[index].relayStat = parameter[6].toInt();
     nodes[index].conStat = parameter[5].toInt();
-    nodes[index].nodeName = parameter[4];
-    sendReply("ESP: NodeStat RCVD");
-
+    String temp = parameter[4];
+    String tempName = temp;
+  
+    int i = tempName.indexOf("_");
+    Serial.print("I: ");
+    Serial.println(i);
+    if(i!=-1){
+      nodes[index].irActions.clear();
+      tempName = tempName.substring(0, i);
+      Serial.print("Tempname: ");
+      Serial.println(tempName);
+      i++;
+      temp = temp.substring(i);
+      int startI = 0, endI = 0;
+      while(startI<temp.length()){
+        endI = temp.indexOf('_', startI);
+        nodes[index].irActions.insert(temp.substring(startI, endI));
+        startI = endI+1;
+      }
+    }else{
+      nodes[index].irActions.clear();
+    }
+  nodes[index].nodeName = tempName;
   printNodeList();
   if(parameter[2].toInt() == 0){
     sendNodeStat(nodeId, 2);
-  }else if(parameter[2].toInt() == 2 && appNodeID!=0)
+  }else if(appNodeID!=0)
     sendNodeStat(nodeId, 0);
-  }else{
-    sendReply("ESP: Invalid ID");
   }
-  
 }
 
 void refactorNodeList(){
@@ -305,17 +354,38 @@ void nodeConfig(IPAddress clientIP){
   bool added = false;
   int type = parameter[2].toInt();
   int mayBeID = 0;
-  Serial.print("New Client IP: ");
-  Serial.println(clientIP);
-  
-  Node newNode(clientIP, parameter[4], type, parameter[6].toInt());
+
+  Node newNode;
+  if(type == 2 || type == 0){
+    Node tempNode(clientIP, parameter[4], type, parameter[6].toInt());
+    newNode = tempNode;
+  }
+  else if(type == 3){
+    String nodeName = parameter[4];
+    set<String> tempSet;
+    int i = nodeName.indexOf("_");
+    if(i!=-1){
+      nodeName = nodeName.substring(0, i);
+      i++;
+      String temp = parameter[4].substring(i);
+      int startI = 0, endI = 0, i;
+      for(i=0; startI<temp.length(); i++){
+        endI = temp.indexOf('_', startI);
+        tempSet.insert(temp.substring(startI, endI));
+        startI = endI+1;
+      }
+    }
+    Node tempNode(clientIP, nodeName, type, tempSet, parameter[6].toInt());
+    newNode = tempNode;
+  }
 
   for(int i=0; i<Node::nodeCount; i++){
-    if(clientIP == nodes[i].ip){
+    if(clientIP == nodes[i].ip && type == nodes[i].type){
       newNode.id = i+1;
       nodes[i].relayStat = parameter[6].toInt();
       nodes[i].conStat = 1;
-      nodes[i].nodeName = parameter[4];
+      nodes[i].nodeName = newNode.nodeName;
+      nodes[i].irActions = newNode.irActions;
       added = true;
       break;
     }
@@ -339,7 +409,7 @@ void nodeConfig(IPAddress clientIP){
       added = true;
     }
   }
-
+  delay(500);
   message = "client@esp$action@config$1$";
   message.concat(newNode.id);
   message.concat("$ESP$");
@@ -348,11 +418,10 @@ void nodeConfig(IPAddress clientIP){
   message.concat(newNode.relayStat);
   message.concat("$");
 
-  sendReply("ESP32: Config RQST RCVD");
-  delay(500);
   sendPacket(clientIP, port, message);
+  delay(400);
 
-  if(type == 2 && appNodeID!=0)
+  if(type != 0 && appNodeID!=0)
     sendNodeStat(newNode.id, 0);
   else if(type == 0)
     appNodeID = newNode.id;
@@ -361,7 +430,6 @@ void nodeConfig(IPAddress clientIP){
 }
 
 void resetDevice(){
-  sendReply("Resetting Meta");
   strcpy(ssid, default_ssid);
   strcpy(password, default_password);
   setMetaData();
@@ -369,39 +437,66 @@ void resetDevice(){
   restartDevice();
 }
 
+void forwardRequest(int toId){
+  message = "client@esp$";
+  message.concat(parameter[1]);
+  message.concat("$1$");
+  message.concat(parameter[3]);
+  message.concat("$");
+  message.concat(parameter[4]);
+  message.concat("$");
+  message.concat(parameter[5]);
+  message.concat("$");
+  message.concat(parameter[6]);
+  message.concat("$");
+
+  sendPacket(nodes[toId-1].ip, port, message);
+}
+
 void parameterDecode(){
 
   if(parameter[1].equals("action@stat")){
+      sendReply("ESP32: NodeStat RCVD");
       setNodeStat();
   }
   else if(parameter[1].equals("action@config")){
-    Serial.println("Node Config Request");
+    sendReply("ESP32: Config RQST RCVD");
     if(Node::nodeCount < MAX_NODES){
       WiFiClient client = server.client();
       IPAddress clientIP = client.remoteIP();
       nodeConfig(clientIP);
     }else{
-      Serial.println("Node List Full");
       server.send(200, "text/plain", "ESP: Node List Full");
     } 
   }else if(parameter[1].equals("action@getnodelist")){
-    sendReply("ESP: Request for Node List RCVD");
+    sendReply("ESP32: Request for Node List RCVD");
+    delay(500);
     sendNodeListToApp();
   }
   else if(parameter[1].equals("action@reset") && parameter[0].equals("client@app")){
+  {
+    sendReply("ESP32: Resetting Meta");
     resetDevice();
+  }
   }else if(parameter[1].equals("action@apconfig") && parameter[0].equals("client@app")){
-      sendReply("ESP: APConfig Received");
+      sendReply("ESP32: APConfig Received");
       strcpy(ssid, parameter[2].c_str());
       strcpy(password, parameter[3].c_str());
       setMetaData();
       sendAPConfig();
       restartDevice();
+  }else if(parameter[1].equals("action@recordIR") || parameter[1].equals("action@saveIR") || parameter[1].equals("action@task") || parameter[1].equals("action@remove")){
+    int irNodeId = parameter[3].toInt();
+    if(irNodeId>0 && irNodeId<=Node::nodeCount){
+      sendReply("ESP32: Request Forwarded");
+      forwardRequest(irNodeId);
+    }
+    else
+      sendReply("ESP: Request Forward Fail");
   }
 }
 
 void handleRoot(){
-  Serial.println("Root page accessed by a client!");
   server.send ( 200, "text/plain", "ESP: Hello, you are at root!");
 }
 
@@ -429,7 +524,6 @@ void setNodeStatOf(String name, int rStat){
       sendNodeStat(i+1, 2);
       if(appNodeID!=0)
         sendNodeStat(i+1, 0);
-      //break;
     }
   }
 }
@@ -450,23 +544,17 @@ void importG1(){
   waitingState();
   while(flag){
     i = millis();
-    
     voiceSerial.write(0xAA);
     voiceSerial.write(0x21);
-    
-    
+      
     while(!voiceSerial.available() && millis()-i<100);
   
-    
     if(voiceSerial.available()){
       temp = voiceSerial.read();
       if(temp == 0xCC)
       {  
         flag = 0;
-        i = millis() - i;
-        Serial.print("Imported 1: ");
-        Serial.print(i);
-        Serial.println(" msec");
+        Serial.print("Imported 1");
         blinkGreen();
       }
     }
@@ -492,10 +580,7 @@ void importG2(){
       if(temp == 0xCC)
       {  
         flag = 0;
-        i = millis() - i;
         Serial.print("Imported 2: ");
-        Serial.print(i);
-        Serial.println(" msec");
         blinkGreen();
       }
     }
@@ -545,7 +630,6 @@ void setup() {
   delay(300);
   voiceSerial.write(0xAA);
   voiceSerial.write(0x37);
-
   Serial.println("Wrote");
   delay(1000);
 
